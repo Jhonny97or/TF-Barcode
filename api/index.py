@@ -44,30 +44,23 @@ UTC_TZ = ZoneInfo("UTC")
 MIN_PRICE = 1.00
 MAX_PRICE = 5.00
 
-# Volumen mínimo actual
 MIN_DAY_VOLUME = 250_000
 
-# Número máximo de acciones que analizamos en profundidad
 MAX_CANDIDATES = 90
 
-# Top final
 TOP_RESULTS = 30
 
-# Mínimo de barras/minutos de negociación por sesión
 MIN_ACTIVE_MINUTES = 60
 
-# Paralelismo
 MAX_WORKERS = 10
 
-# Timeout por request
 REQUEST_TIMEOUT = 12
 
-# Cache
 CACHE_SECONDS = 60
 
 
 # ============================================================
-# SESIÓN HTTP
+# HTTP SESSION
 # ============================================================
 
 session = requests.Session()
@@ -141,8 +134,6 @@ def clamp(
 
 def valid_login():
 
-    # Si no existen credenciales en Vercel,
-    # NO permitimos acceso.
     if not LOGIN_USER or not LOGIN_PASSWORD:
         return False
 
@@ -208,10 +199,6 @@ def request_json(
             params=params,
             timeout=REQUEST_TIMEOUT
         )
-
-        # ====================================================
-        # FALLBACK POLYGON
-        # ====================================================
 
         if (
             response.status_code != 200
@@ -319,12 +306,10 @@ def snapshot_price(item):
     )
 
     return clean_number(
-
         last_trade.get("p")
         or day.get("c")
         or prev_day.get("c")
         or 0
-
     )
 
 
@@ -384,26 +369,14 @@ def get_candidates():
             item
         )
 
-        # ====================================================
-        # PRECIO
-        # ====================================================
-
         if price < MIN_PRICE:
             continue
 
         if price > MAX_PRICE:
             continue
 
-        # ====================================================
-        # VOLUMEN
-        # ====================================================
-
         if volume < MIN_DAY_VOLUME:
             continue
-
-        # ====================================================
-        # EVITAR SÍMBOLOS EXTRAÑOS
-        # ====================================================
 
         if len(ticker) > 6:
             continue
@@ -425,10 +398,6 @@ def get_candidates():
                     )
             }
         )
-
-    # ========================================================
-    # MÁS LÍQUIDOS PRIMERO
-    # ========================================================
 
     candidates.sort(
         key=lambda x: x[
@@ -454,8 +423,6 @@ def get_minute_bars(
         NY_TZ
     )
 
-    # Buscamos 7 días calendario para capturar
-    # cómodamente las últimas dos sesiones hábiles.
     start_date = (
         now.date()
         - timedelta(
@@ -513,11 +480,6 @@ def get_minute_bars(
         ).astimezone(
             NY_TZ
         )
-
-        # ====================================================
-        # SOLO MERCADO REGULAR
-        # 09:30 - 16:00 ET
-        # ====================================================
 
         current_time = dt.time()
 
@@ -606,7 +568,6 @@ def group_sessions(
             date_value
         ]
 
-        # Necesitamos un mínimo de actividad.
         if len(
             day_bars
         ) >= MIN_ACTIVE_MINUTES:
@@ -622,7 +583,7 @@ def group_sessions(
 
 
 # ============================================================
-# ANALIZAR COMPORTAMIENTO "BARCODE" DE UN DÍA
+# ANALIZAR COMPORTAMIENTO BARCODE DE UN DÍA
 # ============================================================
 
 def analyze_barcode_day(
@@ -634,10 +595,6 @@ def analyze_barcode_day(
     ) < MIN_ACTIVE_MINUTES:
 
         return None
-
-    # ========================================================
-    # CIERRES REDONDEADOS A CENTAVOS
-    # ========================================================
 
     closes = [
 
@@ -704,15 +661,12 @@ def analyze_barcode_day(
             - bar["low"]
         )
 
-        # Barra <= 2 centavos
         if bar_range <= 0.0201:
             small_bars += 1
 
-        # Barra <= 1 centavo
         if bar_range <= 0.0101:
             one_cent_bars += 1
 
-        # Prácticamente sin rango
         if bar_range <= 0.001:
             zero_range_bars += 1
 
@@ -755,15 +709,12 @@ def analyze_barcode_day(
             - closes[i - 1]
         )
 
-        # Cambio <= $0.02
         if delta <= 0.0201:
             tiny_steps += 1
 
-        # Exactamente el mismo centavo
         if delta <= 0.001:
             same_level += 1
 
-        # Aproximadamente 1 centavo
         if (
             delta >= 0.009
             and
@@ -771,7 +722,6 @@ def analyze_barcode_day(
         ):
             one_cent_steps += 1
 
-        # Aproximadamente 2 centavos
         if (
             delta >= 0.019
             and
@@ -845,10 +795,6 @@ def analyze_barcode_day(
         level_counts
     )
 
-
-    # ========================================================
-    # CONCENTRACIÓN EN LOS NIVELES MÁS FRECUENTES
-    # ========================================================
 
     most_common = level_counts.most_common(
         5
@@ -951,7 +897,7 @@ def analyze_barcode_day(
 
 
     # ========================================================
-    # 6. PENALIZAR EXCESO DE NIVELES DIFERENTES
+    # 6. EFICIENCIA DE NIVELES
     # ========================================================
 
     unique_level_ratio = safe_div(
@@ -960,7 +906,6 @@ def analyze_barcode_day(
     )
 
 
-    # Un barcode normalmente reutiliza muchos precios.
     if unique_level_ratio <= 0.10:
 
         level_efficiency_score = 100
@@ -1005,55 +950,46 @@ def analyze_barcode_day(
 
     final_score = (
 
-        # Muchos candles de 1m pequeños
         compression_score
         * 0.25
 
         +
 
-        # Minuto a minuto cambia poco
         step_score
         * 0.22
 
         +
 
-        # Reutiliza precios
         repetition_score
         * 0.18
 
         +
 
-        # Rango diario controlado
         range_score
         * 0.10
 
         +
 
-        # Muchísimas barras <= 1 centavo
         one_cent_bar_pct
         * 0.07
 
         +
 
-        # Cierres exactamente iguales
         same_level_pct
         * 0.06
 
         +
 
-        # Concentración en pocos precios
         top5_level_pct
         * 0.04
 
         +
 
-        # Cantidad eficiente de niveles
         level_efficiency_score
         * 0.04
 
         +
 
-        # No queremos stocks completamente muertos
         activity_score
         * 0.04
     )
@@ -1063,28 +999,20 @@ def analyze_barcode_day(
     # PENALIZACIONES
     # ========================================================
 
-    # Si las barras pequeñas son pocas,
-    # no debe considerarse barcode.
     if small_bar_pct < 45:
 
         final_score *= 0.72
 
 
-    # Si los cambios minuto a minuto son demasiado grandes.
     if tiny_step_pct < 55:
 
         final_score *= 0.75
 
 
-    # Si casi nunca repite precios.
     if repeated_level_pct < 40:
 
         final_score *= 0.80
 
-
-    # ========================================================
-    # RESULTADO
-    # ========================================================
 
     return {
 
@@ -1204,20 +1132,12 @@ def analyze_ticker(
             bars
         )
 
-        # ====================================================
-        # DEBE TENER DOS SESIONES VÁLIDAS
-        # ====================================================
-
         if len(
             sessions
         ) < 2:
 
             return None
 
-
-        # ====================================================
-        # ÚLTIMAS DOS SESIONES
-        # ====================================================
 
         last_two = sessions[
             -2:
@@ -1260,10 +1180,6 @@ def analyze_ticker(
         ]
 
 
-        # ====================================================
-        # CONSISTENCIA ENTRE AMBOS DÍAS
-        # ====================================================
-
         difference = abs(
             score1
             - score2
@@ -1285,10 +1201,6 @@ def analyze_ticker(
         )
 
 
-        # ====================================================
-        # SCORE GENERAL
-        # ====================================================
-
         two_day_score = (
 
             score1
@@ -1307,7 +1219,6 @@ def analyze_ticker(
 
 
         # ====================================================
-        # REGLA IMPORTANTE:
         # AMBOS DÍAS DEBEN SER BUENOS
         # ====================================================
 
@@ -1325,7 +1236,7 @@ def analyze_ticker(
 
 
         # ====================================================
-        # BONUS SI AMBOS DÍAS SON MUY "BARCODE"
+        # BONUS POR BARCODE MUY CONSISTENTE
         # ====================================================
 
         if (
@@ -1355,49 +1266,33 @@ def analyze_ticker(
 
 
         # ====================================================
-        # CLASIFICACIÓN
+        # CALIDAD
         # ====================================================
 
         if two_day_score >= 85:
 
-            quality = (
-                "EXTREME"
-            )
+            quality = "EXTREME"
 
         elif two_day_score >= 75:
 
-            quality = (
-                "VERY HIGH"
-            )
+            quality = "VERY HIGH"
 
         elif two_day_score >= 65:
 
-            quality = (
-                "HIGH"
-            )
+            quality = "HIGH"
 
         elif two_day_score >= 55:
 
-            quality = (
-                "GOOD"
-            )
+            quality = "GOOD"
 
         elif two_day_score >= 45:
 
-            quality = (
-                "WATCH"
-            )
+            quality = "WATCH"
 
         else:
 
-            quality = (
-                "LOW"
-            )
+            quality = "LOW"
 
-
-        # ====================================================
-        # RESULTADO
-        # ====================================================
 
         return {
 
@@ -1572,10 +1467,6 @@ def analyze_ticker(
 
 def build_ranking():
 
-    # ========================================================
-    # CACHE
-    # ========================================================
-
     now_ts = time.time()
 
     if (
@@ -1599,10 +1490,6 @@ def build_ranking():
     started = time.time()
 
 
-    # ========================================================
-    # CANDIDATOS
-    # ========================================================
-
     candidates = get_candidates()
 
 
@@ -1610,10 +1497,6 @@ def build_ranking():
 
     errors = []
 
-
-    # ========================================================
-    # ANALIZAR EN PARALELO
-    # ========================================================
 
     with ThreadPoolExecutor(
         max_workers=MAX_WORKERS
@@ -1690,10 +1573,6 @@ def build_ranking():
                 )
 
 
-    # ========================================================
-    # ORDENAR POR MEJOR BARCODE
-    # ========================================================
-
     results.sort(
 
         key=lambda x: (
@@ -1720,18 +1599,10 @@ def build_ranking():
     )
 
 
-    # ========================================================
-    # TOP 30
-    # ========================================================
-
     results = results[
         :TOP_RESULTS
     ]
 
-
-    # ========================================================
-    # RANK
-    # ========================================================
 
     for index, row in enumerate(
         results,
@@ -1742,10 +1613,6 @@ def build_ranking():
             "rank"
         ] = index
 
-
-    # ========================================================
-    # RESPUESTA FINAL
-    # ========================================================
 
     now = datetime.now(
         NY_TZ
@@ -1798,10 +1665,6 @@ def build_ranking():
     }
 
 
-    # ========================================================
-    # GUARDAR CACHE
-    # ========================================================
-
     CACHE[
         "timestamp"
     ] = time.time()
@@ -1815,7 +1678,7 @@ def build_ranking():
 
 
 # ============================================================
-# LEER INDEX.HTML
+# LEER api/index.html
 # ============================================================
 
 def load_frontend():
@@ -1825,14 +1688,14 @@ def load_frontend():
         .resolve()
     )
 
-    project_root = (
+    # index.html está EN LA MISMA CARPETA que index.py:
+    #
+    # /var/task/api/index.py
+    # /var/task/api/index.html
+    #
+    html_path = (
         current_file
         .parent
-        .parent
-    )
-
-    html_path = (
-        project_root
         /
         "index.html"
     )
@@ -1891,7 +1754,7 @@ def home():
 
 
 # ============================================================
-# API DEL RANKING
+# API RANKING
 # ============================================================
 
 @app.route("/api")
@@ -1910,9 +1773,7 @@ def ranking():
 
         response.headers[
             "Cache-Control"
-        ] = (
-            "no-store, max-age=0"
-        )
+        ] = "no-store, max-age=0"
 
         return response
 
